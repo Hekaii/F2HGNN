@@ -11,67 +11,6 @@ import sys
 from tqdm import tqdm
 from sklearn.decomposition import NMF
 
-
-class Tee(object):
-    def __init__(self, log_file_path):
-        self.terminal = sys.__stdout__
-        self.log = open(log_file_path, "w", encoding='utf-8')
-
-    def write(self, message):
-        self.terminal.write(message)
-        self.log.write(message)
-
-    def flush(self):
-        self.terminal.flush()
-        self.log.flush()
-
-
-def setup_logger(log_file_name):
-    log_dir = "logs/Pseudo/100K"
-    os.makedirs(log_dir, exist_ok=True)
-    log_path = os.path.join(log_dir, log_file_name)
-    sys.stdout = Tee(log_path)
-    print(f"print: {log_path}")
-
-
-def set_random_seed(seed):
-    np.random.seed(seed)
-    random.seed(seed)
-    tf.random.set_seed(seed)
-
-
-class HyperGraphConv(layers.Layer):
-    def __init__(self, output_dim):
-        super().__init__()
-        self.output_dim = output_dim
-        self.H_dense = None
-        self.H_norm = None
-
-    def build(self, input_shape):
-        self.W = self.add_weight(shape=(input_shape[-1], self.output_dim),
-                                 initializer='glorot_uniform', trainable=True)
-
-    def call(self, X, H):
-        H_dense = tf.sparse.to_dense(H)
-
-        if self.H_dense is None or not tf.reduce_all(tf.equal(H_dense, self.H_dense)):
-            self.H_dense = H_dense
-            Dv = tf.linalg.diag(tf.reduce_sum(self.H_dense, axis=1))
-            De = tf.linalg.diag(tf.reduce_sum(self.H_dense, axis=0))
-            Dv_inv = tf.linalg.inv(Dv + tf.eye(Dv.shape[0]) * 1e-6)
-            De_inv = tf.linalg.inv(De + tf.eye(De.shape[0]) * 1e-6)
-            HT = tf.transpose(self.H_dense)
-            self.H_norm = tf.matmul(tf.matmul(tf.matmul(Dv_inv, self.H_dense), De_inv), HT)
-
-        return tf.nn.relu(tf.matmul(tf.matmul(self.H_norm, X), self.W))
-
-
-def predict(user_emb, item_emb, u_idx, i_idx):
-    u_vec = tf.gather(user_emb, u_idx)
-    i_vec = tf.gather(item_emb, i_idx)
-    return tf.reduce_sum(u_vec * i_vec, axis=1)
-
-
 def client_compute_gradients(uid, user_emb, item_emb, model_layer, H, train_data_per_user, loss_fn, clip,
                              pseudo_item_count, num_items, delt, epochs):
     user_interactions = train_data_per_user[uid]
@@ -213,7 +152,6 @@ class Server:
         test_rmse = tf.sqrt(self.mse_loss(test_ratings, test_preds))
         print(f"\nFinal Test RMSE: {test_rmse:.4f}")
 
-
 def build_hypergraph_sparse(df, num_users, num_items):
     rows, cols = [], []
     for uid, user_df in df.groupby(0):
@@ -246,20 +184,6 @@ def preprocess_data(df_train, df_val, df_test):
     num_items = len(item2idx)
 
     return df_train, df_val, df_test, num_users, num_items, user2idx, item2idx
-
-
-def init_mf_embeddings(df_train, num_users, num_items, embedding_dim):
-    user_item_matrix = np.zeros((num_users, num_items))
-
-    for row in df_train.itertuples(index=False):
-        user_item_matrix[row[0], row[1]] = row[2]
-
-    model = NMF(n_components=embedding_dim, init='random', random_state=42)
-    user_embeddings = model.fit_transform(user_item_matrix)
-    item_embeddings = model.components_.T
-
-    return user_embeddings, item_embeddings
-
 
 def main():
     set_random_seed(42)
@@ -315,9 +239,3 @@ def main():
 
     server.train(H, train_data_per_user, df_val)
     server.test(H, df_test)
-
-for count in range(250, 1501, 250):
-    sys.argv = [sys.argv[0],
-                '--pseudo_item_count', str(count),
-                '--log_file', f'{count}.txt']
-    main()
